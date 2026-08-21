@@ -22,6 +22,8 @@
     background:radial-gradient(ellipse at 50% 30%, var(--bg-deep) 0%, var(--bg-deeper) 75%);
     font-family:'Work Sans', sans-serif;
     color:var(--cream);
+    user-select:none; /* dragging to pan can start anywhere, including over text — don't let it select */
+    -webkit-user-select:none;
   }
   #app{position:relative;width:100vw;height:100vh;}
 
@@ -149,7 +151,7 @@
 
   /* ---------- Sky ---------- */
   #sky-view{position:absolute;inset:0;z-index:5;overflow:hidden;cursor:grab;}
-  #sky-view.dragging{cursor:grabbing;}
+  body.dragging, body.dragging *{cursor:grabbing !important;}
   #world-layer{position:absolute;inset:0;}
   .sky-quadrant{position:absolute;width:100vw;height:100vh;}
 
@@ -938,11 +940,11 @@ resizeCanvas();
 // nearest the visible area, so stars seamlessly slide in from the opposite
 // edge as they leave one side.
 function worldToCanvasX(worldX){
-  const local = wrapValue(worldX - dragOffsetX, WORLD_W);
+  const local = wrapValue(worldX + dragOffsetX, WORLD_W);
   return local <= WORLD_W/2 ? local : local - WORLD_W;
 }
 function worldToCanvasY(worldY){
-  const local = wrapValue(worldY - dragOffsetY, WORLD_H);
+  const local = wrapValue(worldY + dragOffsetY, WORLD_H);
   return local <= WORLD_H/2 ? local : local - WORLD_H;
 }
 
@@ -1298,13 +1300,15 @@ let lastPanDelta = { x: 0, y: 0 }; // so exitStar can reverse phase 1 exactly, r
 
 function zoomIntoStar(starId, originEl){
   if(activeStarId || current || zoomBusy) return; // already zoomed in, or busy with a transition
-  if(suppressNextStarClick){ suppressNextStarClick = false; return; } // this click was really the release of a drag
+  if(suppressNextClick){ suppressNextClick = false; return; } // this click was really the release of a drag
   const s = starRegistry[starId];
   if(!s) return;
   if(!originEl) originEl = s.anchorEl;
 
   zoomBusy = true;
   playSound('whoosh');
+  systemPanX = 0;
+  systemPanY = 0;
 
   // Phase 1: pan the whole world — background stars and all — so the chosen
   // star (wherever its clicked copy was) ends up centered, like turning to
@@ -1357,6 +1361,7 @@ function zoomIntoStar(starId, originEl){
 
     const targetSize = Math.min(window.innerWidth, window.innerHeight) * 0.84;
     const targetScale = targetSize / ORBIT_FIELD_PX;
+    s._settledScale = targetScale; // used later if the person drags to look around while zoomed in
     requestAnimationFrame(()=>{
       el.style.transform = starTransform(window.innerWidth/2, window.innerHeight/2, targetScale);
     });
@@ -1385,19 +1390,18 @@ function exitStar(){
   playSound('whoosh');
 
   const el = s.systemEl;
-  // Phase 1: shrink back down to resting scale while still centered.
-  // A fully-zoomed star is always exactly at viewport center by design —
-  // that's phase 2 of zoomIntoStar's hardcoded target — so use center
-  // directly rather than querying s.anchorEl, which (like the equivalent bug
-  // in zoomIntoStar) is wrong whenever the star was entered via an echo:
-  // the primary anchor sits in a different quadrant and generally isn't
-  // anywhere near center.
-  const ax = window.innerWidth/2;
-  const ay = window.innerHeight/2;
+  // Phase 1: shrink back down to resting scale from wherever it currently
+  // is. A freshly-zoomed star sits exactly at viewport center by design,
+  // but dragging while zoomed in (systemPanX/Y) can have moved it since —
+  // so account for that rather than assuming dead center.
+  const ax = window.innerWidth/2 + systemPanX;
+  const ay = window.innerHeight/2 + systemPanY;
   triggerBgWarp(el, ax, ay, -1);
 
   el.style.transition = `transform ${ZOOM_MS}ms ${ZOOM_EASE}`;
   el.style.transform = starTransform(ax, ay, REST_SCALE);
+  systemPanX = 0;
+  systemPanY = 0;
 
   // the glare returns as it shrinks back down — bright again, same duration
   s.flareEl.classList.remove('dimmed');
@@ -1464,6 +1468,7 @@ function undimSiblings(scene){
 
 // Step 1 -> 2: click a body in the system view. Zoom it up close.
 function handleBodyClick(el, pivot, scene){
+  if(suppressNextClick){ suppressNextClick = false; return; } // this click was really the release of a drag
   if(current && current.stage==='focused' && current.el===el){
     // already focused on this body: second click goes inside
     enterInside();
@@ -1638,21 +1643,29 @@ document.addEventListener('wheel', (e)=>{
    in every direction, eventually bringing you back to where you started.
    Content follows the cursor directly, like dragging a photo. A small
    movement threshold distinguishes a drag from a click, so tapping a star
-   still works normally. */
+   still works normally.
+
+   The same drag works once you're inside a solar system, too: the sun and
+   its planets pan right along with the surrounding starfield, which keeps
+   wrapping infinitely behind them — so looking around a system feels like
+   the same continuous space as the sky, not a separate fixed diorama. */
 let isDragging = false;
 let dragMoved = false;
 let dragLastX = 0, dragLastY = 0;
-let suppressNextStarClick = false; // set true right after a real drag ends, so its release doesn't also fire a star's click
+let suppressNextClick = false; // set true right after a real drag ends, so its release doesn't also fire a click on whatever's underneath
+let systemPanX = 0, systemPanY = 0; // extra offset applied to the zoomed-in solar system itself while dragging
 const DRAG_CLICK_THRESHOLD = 5; // px of total movement before it counts as a drag, not a click
+const DRAG_UI_EXCLUDE = 'header, #system-hud, .focus-caption, #inside-scene, #help-panel, #intro-overlay';
 
-function dragPointerDown(x, y){
-  if(activeStarId || zoomBusy) return; // only look-around in the open sky
+function dragPointerDown(x, y, target){
+  if(zoomBusy || current) return; // not mid-transition, not focused on a specific body
+  if(target && target.closest && target.closest(DRAG_UI_EXCLUDE)) return; // let UI chrome handle its own clicks
   isDragging = true;
   dragMoved = false;
-  suppressNextStarClick = false;
+  suppressNextClick = false;
   dragLastX = x;
   dragLastY = y;
-  skyView.classList.add('dragging');
+  document.body.classList.add('dragging');
 }
 function dragPointerMove(x, y){
   if(!isDragging) return;
@@ -1665,28 +1678,41 @@ function dragPointerMove(x, y){
   dragOffsetY += dy;
   dragLastX = x;
   dragLastY = y;
-  applyWorldTransform();
+  applyWorldTransform(); // keeps the background starfield panning/wrapping either way
+
+  if(activeStarId){
+    // also carry the zoomed-in solar system along with the drag, so it
+    // feels like one continuous space rather than a fixed picture sitting
+    // on top of a pannable background
+    const s = starRegistry[activeStarId];
+    systemPanX += dx;
+    systemPanY += dy;
+    s.systemEl.style.transform = starTransform(
+      window.innerWidth/2 + systemPanX,
+      window.innerHeight/2 + systemPanY,
+      s._settledScale
+    );
+  }
 }
 function dragPointerUp(){
   isDragging = false;
-  skyView.classList.remove('dragging');
+  document.body.classList.remove('dragging');
   if(dragMoved){
-    // a real drag just ended — the star's own click handler checks this flag
-    // and bows out just once, rather than a global listener that could leak
-    // and end up silently blocking unrelated clicks (like the help button)
-    // if no click event happened to follow.
-    suppressNextStarClick = true;
-    setTimeout(()=>{ suppressNextStarClick = false; }, 50);
+    // a real drag just ended — click handlers check this flag and bow out
+    // just once, rather than a global listener that could leak and end up
+    // silently blocking unrelated clicks if no click event happened to follow.
+    suppressNextClick = true;
+    setTimeout(()=>{ suppressNextClick = false; }, 50);
   }
 }
 
-skyView.addEventListener('mousedown', (e)=>{ dragPointerDown(e.clientX, e.clientY); });
+document.addEventListener('mousedown', (e)=>{ dragPointerDown(e.clientX, e.clientY, e.target); });
 document.addEventListener('mousemove', (e)=>{ dragPointerMove(e.clientX, e.clientY); });
 document.addEventListener('mouseup', dragPointerUp);
 
-skyView.addEventListener('touchstart', (e)=>{
+document.addEventListener('touchstart', (e)=>{
   if(e.touches.length !== 1) return;
-  dragPointerDown(e.touches[0].clientX, e.touches[0].clientY);
+  dragPointerDown(e.touches[0].clientX, e.touches[0].clientY, e.target);
 }, { passive:true });
 document.addEventListener('touchmove', (e)=>{
   if(!isDragging || e.touches.length !== 1) return;
