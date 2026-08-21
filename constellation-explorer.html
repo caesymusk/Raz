@@ -1,0 +1,1724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Star Charts — Constellation Explorer</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,300;0,9..144,500;0,9..144,600;1,9..144,400&family=Work+Sans:wght@300;400;500&family=Space+Mono:wght@400;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg-deep:#0B0F2E;
+    --bg-deeper:#050714;
+    --gold:#E8C468;
+    --copper:#C97D5D;
+    --cream:#F1EEE3;
+    --muted:#8B93B8;
+    --line:rgba(232,196,104,0.28);
+  }
+  *{box-sizing:border-box;}
+  html,body{
+    margin:0;padding:0;width:100%;height:100%;overflow:hidden;
+    background:radial-gradient(ellipse at 50% 30%, var(--bg-deep) 0%, var(--bg-deeper) 75%);
+    font-family:'Work Sans', sans-serif;
+    color:var(--cream);
+    user-select:none; /* dragging to pan can start anywhere, including over text — don't let it select */
+    -webkit-user-select:none;
+  }
+  #app{position:relative;width:100vw;height:100vh;}
+
+  canvas#bg{position:absolute;inset:0;width:100%;height:100%;}
+
+  /* ---------- Header ---------- */
+  header{
+    position:absolute;top:0;left:0;right:0;
+    display:flex;justify-content:space-between;align-items:flex-start;
+    padding:2.2rem 2.6rem;
+    z-index:40;
+    pointer-events:none;
+  }
+  .brand{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:1.35rem;
+    letter-spacing:0.02em;
+  }
+  .brand em{font-style:italic;color:var(--gold);}
+  .coords{
+    font-family:'Space Mono', monospace;
+    font-size:0.68rem;
+    color:var(--muted);
+    text-align:right;
+    letter-spacing:0.05em;
+    line-height:1.6;
+  }
+  .header-right{
+    display:flex;
+    align-items:flex-start;
+    gap:1rem;
+    pointer-events:auto;
+  }
+  .help-wrap{position:relative;}
+  #sound-toggle{
+    background:none;
+    border:1px solid rgba(139,147,184,0.4);
+    color:var(--muted);
+    font-family:'Space Mono', monospace;
+    font-size:0.62rem;
+    letter-spacing:0.06em;
+    padding:0.35rem 0.6rem;
+    border-radius:2px;
+    cursor:pointer;
+    text-transform:uppercase;
+    transition:border-color 250ms ease, color 250ms ease;
+    opacity:0;
+    pointer-events:none;
+  }
+  #sound-toggle.visible{opacity:1;pointer-events:auto;}
+  #sound-toggle:hover{border-color:var(--gold);color:var(--gold);}
+
+  /* ---------- Cinematic intro ---------- */
+  #intro-overlay{
+    position:fixed;inset:0;
+    z-index:200;
+    background:rgba(5,7,20,0.88);
+    display:flex;
+    align-items:center;justify-content:center;
+    flex-direction:column;
+    cursor:pointer;
+    transition:opacity 1200ms ease;
+  }
+  #intro-overlay.dismissed{
+    opacity:0;
+    pointer-events:none;
+  }
+  .intro-line{
+    font-family:'Fraunces', serif;
+    font-weight:300;
+    font-style:italic;
+    text-align:center;
+    opacity:0;
+    position:absolute;
+    left:50%;top:50%;
+    width:90vw;
+    max-width:640px;
+    transform:translate(-50%, calc(-50% + 14px));
+    transition:opacity 1400ms ease, transform 1400ms ease;
+  }
+  .intro-line.active{
+    opacity:1;
+    transform:translate(-50%, -50%);
+  }
+  .intro-line.gone{
+    opacity:0;
+    transform:translate(-50%, calc(-50% - 14px));
+  }
+  .intro-line[data-role="hello"]{
+    font-size:clamp(2.4rem, 6vw, 4rem);
+    color:var(--cream);
+    margin-top:-3rem;
+  }
+  .intro-line[data-role="welcome"]{
+    font-size:clamp(1.6rem, 3.4vw, 2.3rem);
+    color:var(--gold);
+  }
+  .intro-line[data-role="instruction"]{
+    font-family:'Space Mono', monospace;
+    font-style:normal;
+    font-size:0.85rem;
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+    color:var(--muted);
+  }
+  .intro-enter-hint{
+    position:absolute;
+    left:50%;bottom:12%;
+    transform:translateX(-50%);
+    font-family:'Space Mono', monospace;
+    font-size:0.7rem;
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    color:var(--muted);
+    opacity:0;
+    transition:opacity 1000ms ease;
+    animation:pulse-hint 2.4s ease-in-out infinite;
+  }
+  .intro-enter-hint.active{opacity:1;}
+  @keyframes pulse-hint{
+    0%,100%{opacity:0.5;}
+    50%{opacity:1;}
+  }
+
+  /* ---------- Sky ---------- */
+  #sky-view{position:absolute;inset:0;z-index:5;overflow:hidden;cursor:grab;}
+  body.dragging, body.dragging *{cursor:grabbing !important;}
+  #world-layer{position:absolute;inset:0;}
+  .sky-quadrant{position:absolute;width:100vw;height:100vh;}
+
+  /* A cheap stand-in for a star used in the three "echo" quadrants that tile
+     around the primary sky — same look at rest, same hover-grow, same click/
+     scroll behavior, but none of the sun/planet DOM underneath. Only the
+     primary copy of each star carries the real solar system; clicking an
+     echo just tells that same star to zoom in, using the echo's own position
+     as the animation's starting point. */
+  .star-echo{
+    position:absolute;
+    top:50%;left:50%;
+    width:9px;height:9px;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 35%, #FFE9B0, var(--gold) 55%, #B8862F 100%);
+    transition:transform 220ms ease;
+  }
+  .star-echo::before{
+    content:'';
+    position:absolute;
+    top:50%;left:50%;
+    width:320%;height:320%;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle, rgba(255,241,199,0.5) 0%, rgba(232,196,104,0.18) 45%, rgba(232,196,104,0) 75%);
+  }
+  .star-anchor:hover .star-echo{
+    transform:translate(-50%,-50%) scale(1.5);
+  }
+
+  /* ---------- Help ---------- */
+  #help-toggle{
+    width:1.9rem;height:1.9rem;
+    display:flex;align-items:center;justify-content:center;
+    background:none;
+    border:1px solid rgba(139,147,184,0.4);
+    color:var(--muted);
+    font-family:'Space Mono', monospace;
+    font-size:0.8rem;
+    border-radius:50%;
+    cursor:pointer;
+    transition:border-color 250ms ease, color 250ms ease;
+  }
+  #help-toggle:hover{border-color:var(--gold);color:var(--gold);}
+
+  #help-panel{
+    position:absolute;
+    top:3.4rem;right:0;
+    width:min(280px, 80vw);
+    background:linear-gradient(180deg, #10143a, #0B0F2E);
+    border:1px solid rgba(232,196,104,0.3);
+    border-radius:6px;
+    padding:1.1rem 1.3rem;
+    text-align:left;
+    opacity:0;
+    transform:translateY(-8px);
+    pointer-events:none;
+    transition:opacity 250ms ease, transform 250ms ease;
+  }
+  #help-panel.open{
+    opacity:1;
+    transform:translateY(0);
+    pointer-events:auto;
+  }
+  #help-panel p{
+    margin:0 0 0.6rem 0;
+    font-size:0.82rem;
+    line-height:1.5;
+    color:var(--cream);
+    font-family:'Work Sans', sans-serif;
+  }
+  #help-panel p:last-child{margin-bottom:0;}
+  #help-panel .help-eyebrow{
+    font-family:'Space Mono', monospace;
+    font-size:0.6rem;
+    color:var(--gold);
+    letter-spacing:0.1em;
+    text-transform:uppercase;
+    margin-bottom:0.7rem;
+  }
+
+  /* ---------- Constellation groups ---------- */
+  .constellation{
+    position:absolute;
+  }
+
+  /* ---------- Star = its own solar system, always ----------
+     Every star is a real, persistent solar system sitting at its sky
+     position — just scaled down to near-nothing and washed out by its own
+     light. Zooming in doesn't switch to a different scene; it's the same
+     element growing and its glare clearing, in one continuous motion. */
+  .star-anchor{
+    position:absolute;
+    width:30px;height:30px;
+    margin:-15px 0 0 -15px;
+    cursor:pointer;
+    transition:opacity 500ms ease;
+  }
+  .star-system{
+    position:absolute;
+    top:50%;left:50%;
+    width:640px;height:640px;
+    margin-top:-320px;margin-left:-320px;
+    transform-origin:center center;
+    transform:scale(0.014); /* keep in sync with REST_SCALE in the script below */
+    z-index:15;
+    pointer-events:none;
+    contain:layout style paint;
+    transition:transform 220ms ease;
+  }
+  .star-anchor:hover .star-system{
+    transform:scale(0.021); /* a little bigger — signals it's the one about to be selected */
+  }
+  .orbit-field{position:absolute;inset:0;}
+
+  .orbit{
+    position:absolute;
+    top:50%;left:50%;
+    border-radius:50%;
+    transform:translate(-50%,-50%);
+  }
+  .orbit-spin{
+    position:absolute;
+    top:50%;left:50%;
+    width:0;height:0;
+    animation-name:spin;
+    animation-timing-function:linear;
+    animation-iteration-count:infinite;
+    animation-play-state:paused; /* only the currently-open star's planets should ever be spinning */
+  }
+  @keyframes spin{from{transform:translate(-50%,-50%) rotate(0deg);}to{transform:translate(-50%,-50%) rotate(360deg);}}
+
+  .sun{
+    position:absolute;top:50%;left:50%;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle at 35% 35%, #FFE9B0, var(--gold) 55%, #B8862F 100%);
+    cursor:pointer;
+    z-index:5;
+    pointer-events:none; /* enabled via JS only once this star is actually active — see zoomIntoStar/exitStar */
+    transition:transform 1150ms cubic-bezier(.22,.75,.25,1);
+  }
+  /* Glow via a gradient layer rather than box-shadow. box-shadow's blur gets
+     scaled right along with the sun during the close-up zoom (up to ~5x) —
+     at that scale, the browser's tile-based rendering of a large blur radius
+     showed visible seams (a grid pattern cutting across the glow). A
+     radial-gradient doesn't have this problem at any scale. */
+  .sun::before{
+    content:'';
+    position:absolute;
+    top:50%;left:50%;
+    width:280%;height:280%;
+    transform:translate(-50%,-50%);
+    border-radius:50%;
+    background:radial-gradient(circle, rgba(255,241,199,0.55) 0%, rgba(232,196,104,0.22) 38%, rgba(232,196,104,0) 68%);
+    z-index:-1;
+    pointer-events:none;
+  }
+  /* From far away the star is blinding — bright enough to wash out its whole
+     system. This is the RESTING state: every star carries it by default.
+     No box-shadow here on purpose: a large blurred shadow is expensive to
+     render, and with ~20 stars resting in this state simultaneously it added
+     up to real lag. The .system-flare gradient below carries the brightness
+     instead — a flat gradient fill is far cheaper than a blurred shadow. */
+  .sun.flare{
+    transform:translate(-50%,-50%) scale(2.6);
+  }
+
+  /* Sits over the whole system. Opaque (resting default) = the star's glare
+     is covering everything, planets included — this is what makes a whole
+     solar system read as "just a small bright point" from far away.
+     Clearing it is literally what zooming in reveals. */
+  .system-flare{
+    position:absolute;inset:0;
+    z-index:10;
+    pointer-events:none;
+    background:radial-gradient(circle at 50% 50%, rgba(255,246,222,1) 0%, rgba(255,226,158,0.92) 26%, rgba(232,196,104,0.45) 52%, rgba(232,196,104,0) 76%);
+    opacity:1;
+    transition:opacity 1150ms cubic-bezier(.22,.75,.25,1);
+  }
+  .system-flare.dimmed{opacity:0;}
+
+  .planet{
+    position:absolute;
+    top:0; /* placed at orbit radius via transform */
+    left:0;
+    border-radius:50%;
+    cursor:pointer;
+    pointer-events:none; /* enabled via JS only once this star is actually active */
+    transition:filter 250ms ease;
+  }
+  .planet:hover{filter:brightness(1.3);}
+  .planet-ring{
+    position:absolute;
+    border:2px solid rgba(255,255,255,0.35);
+    border-radius:50%;
+    transform:rotate(-25deg);
+    pointer-events:none;
+  }
+
+  /* ---------- HUD shown while a star system is open ---------- */
+  #system-hud{
+    position:fixed;
+    inset:0;
+    z-index:30;
+    pointer-events:none;
+  }
+  .hud-back{
+    position:absolute;
+    top:5.6rem;left:2.6rem;
+    background:none;
+    border:1px solid var(--muted);
+    color:var(--cream);
+    font-family:'Space Mono', monospace;
+    font-size:0.72rem;
+    letter-spacing:0.06em;
+    padding:0.5rem 0.9rem;
+    border-radius:2px;
+    cursor:pointer;
+    text-transform:uppercase;
+    opacity:0;
+    transform:translateY(-6px);
+    transition:opacity 500ms ease, transform 500ms ease, border-color 250ms ease, color 250ms ease;
+  }
+  .hud-back:hover{border-color:var(--gold);color:var(--gold);}
+  #system-hud.visible .hud-back{opacity:1;transform:translateY(0);pointer-events:auto;}
+
+  .hud-title{
+    position:absolute;
+    top:2.4rem;left:50%;
+    transform:translate(-50%, -6px);
+    text-align:center;
+    opacity:0;
+    transition:opacity 500ms ease, transform 500ms ease;
+  }
+  #system-hud.visible .hud-title{opacity:1;transform:translate(-50%,0);}
+  #system-hud.dim .hud-title, #system-hud.dim .hud-back{opacity:0;pointer-events:none;}
+  .hud-title h2{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:1.5rem;
+    margin:0;
+  }
+  .hud-title p{
+    margin:0.2rem 0 0 0;
+    font-family:'Space Mono', monospace;
+    font-size:0.68rem;
+    color:var(--muted);
+    letter-spacing:0.08em;
+    text-transform:uppercase;
+  }
+
+  /* ---------- Focus caption (shown once a body is zoomed close) ---------- */
+  .focus-caption{
+    position:fixed;
+    left:50%;
+    bottom:9%;
+    transform:translate(-50%, 10px);
+    text-align:center;
+    z-index:56;
+    opacity:0;
+    pointer-events:none;
+    transition:opacity 500ms ease, transform 500ms ease;
+  }
+  .focus-caption.active{opacity:1;transform:translate(-50%,0);pointer-events:auto;}
+  .focus-caption .fc-eyebrow{
+    font-family:'Space Mono', monospace;
+    font-size:0.62rem;
+    color:var(--gold);
+    letter-spacing:0.12em;
+    text-transform:uppercase;
+    margin-bottom:0.3rem;
+  }
+  .focus-caption h3{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:1.4rem;
+    margin:0 0 0.5rem 0;
+  }
+  .focus-caption .fc-hint{
+    font-family:'Space Mono', monospace;
+    font-size:0.68rem;
+    color:var(--muted);
+    letter-spacing:0.05em;
+    margin-bottom:0.7rem;
+  }
+  .fc-back{
+    background:none;
+    border:1px solid var(--muted);
+    color:var(--cream);
+    font-family:'Space Mono', monospace;
+    font-size:0.65rem;
+    letter-spacing:0.06em;
+    padding:0.4rem 0.8rem;
+    border-radius:2px;
+    cursor:pointer;
+    text-transform:uppercase;
+    transition:border-color 250ms ease, color 250ms ease;
+  }
+  .fc-back:hover{border-color:var(--gold);color:var(--gold);}
+
+  /* ---------- Inside-planet scene ---------- */
+  .inside-scene{
+    position:fixed;inset:0;
+    z-index:70;
+    display:none;
+    align-items:center;justify-content:center;
+    opacity:0;
+    transform:scale(1.22);
+    filter:blur(16px);
+    transition:opacity 800ms ease, transform 1000ms cubic-bezier(.15,.7,.2,1), filter 1000ms cubic-bezier(.15,.7,.2,1);
+    overflow:hidden;
+  }
+  .inside-scene.active{display:flex;opacity:1;transform:scale(1);filter:blur(0px);}
+  .inside-surface{
+    position:absolute;inset:-10%;
+    background:var(--inside-color, #333);
+    opacity:0.9;
+  }
+  .inside-vignette{
+    position:absolute;inset:0;
+    background:radial-gradient(ellipse at 50% 50%, transparent 0%, rgba(5,7,20,0.55) 75%, rgba(5,7,20,0.92) 100%);
+  }
+  .inside-content{
+    position:relative;
+    z-index:2;
+    width:min(520px, 86vw);
+    text-align:center;
+    padding:2rem;
+  }
+  .inside-eyebrow{
+    font-family:'Space Mono', monospace;
+    font-size:0.66rem;
+    color:rgba(255,255,255,0.85);
+    letter-spacing:0.14em;
+    text-transform:uppercase;
+    margin-bottom:0.6rem;
+  }
+  .inside-content h3{
+    font-family:'Fraunces', serif;
+    font-weight:500;
+    font-size:2.1rem;
+    margin:0 0 1rem 0;
+    color:#fff;
+    text-shadow:0 2px 20px rgba(0,0,0,0.4);
+  }
+  .inside-content p{
+    font-size:1rem;
+    line-height:1.75;
+    color:rgba(255,255,255,0.92);
+    margin:0;
+    text-shadow:0 1px 12px rgba(0,0,0,0.35);
+  }
+  .inside-back{
+    position:absolute;
+    top:2.2rem;left:2.6rem;
+    z-index:80;
+    background:rgba(5,7,20,0.35);
+    border:1px solid rgba(255,255,255,0.4);
+    color:#fff;
+    font-family:'Space Mono', monospace;
+    font-size:0.72rem;
+    letter-spacing:0.06em;
+    padding:0.5rem 0.9rem;
+    border-radius:2px;
+    cursor:pointer;
+    text-transform:uppercase;
+    transition:border-color 250ms ease;
+  }
+  .inside-back:hover{border-color:#fff;}
+
+  @media (prefers-reduced-motion: reduce){
+    *{animation-duration:0.01ms !important; transition-duration:0.01ms !important;}
+  }
+</style>
+</head>
+<body>
+<div id="app">
+  <canvas id="bg"></canvas>
+
+  <header>
+    <div class="brand">star <em>charts</em></div>
+    <div class="header-right">
+      <button id="sound-toggle">Sound: On</button>
+      <div class="help-wrap">
+        <button id="help-toggle" aria-label="How this works">?</button>
+        <div id="help-panel">
+          <div class="help-eyebrow">How this works</div>
+          <p>Every star is its own solar system, just too small and bright to see from here.</p>
+          <p>Click a star, or hover over one and scroll in, to descend into its system.</p>
+          <p>Once inside, click the sun or a planet to look closer — then again to step inside it.</p>
+        </div>
+      </div>
+      <div class="coords" id="coords-readout">SCANNING SKY&hellip;</div>
+    </div>
+  </header>
+
+  <div id="intro-overlay">
+    <div class="intro-line" data-role="hello">Hello.</div>
+    <div class="intro-line" data-role="welcome">Welcome to Star Charts.</div>
+    <div class="intro-line" data-role="instruction">Scroll into any star, and find out what it is.</div>
+    <div class="intro-enter-hint" id="intro-enter-hint">Tap anywhere to begin</div>
+  </div>
+
+  <div id="sky-view">
+    <div id="world-layer"></div>
+  </div>
+
+  <div id="system-hud">
+    <button class="hud-back" id="hud-back">&#8592; Back to sky</button>
+    <div class="hud-title">
+      <h2 id="hud-star-name">Name</h2>
+      <p id="hud-star-sub">Constellation</p>
+    </div>
+  </div>
+</div>
+
+<div class="focus-caption" id="focus-caption">
+  <div class="fc-eyebrow" id="fc-eyebrow">Body</div>
+  <h3 id="fc-title">Name</h3>
+  <div class="fc-hint">Tap it, or scroll in, to go inside</div>
+  <button class="fc-back" id="fc-back">&#8592; Back to orbit</button>
+</div>
+
+<div class="inside-scene" id="inside-scene">
+  <button class="inside-back" id="inside-back">&#8592; Back to orbit</button>
+  <div class="inside-surface" id="inside-surface"></div>
+  <div class="inside-vignette"></div>
+  <div class="inside-content">
+    <div class="inside-eyebrow" id="inside-eyebrow">Body</div>
+    <h3 id="inside-title">Name</h3>
+    <p id="inside-text">Fact</p>
+  </div>
+</div>
+
+<script>
+/* ============ DATA ============ */
+// Star coordinates are percentages within each constellation's own bounding box.
+// starInfo is parallel to `stars`: each point gets its own name + fact, and is
+// its own persistent solar system — always there, just tiny until you approach.
+const CONSTELLATIONS = [
+  {
+    id: 'orion',
+    name: 'Orion',
+    myth: 'The Hunter',
+    box: { top: '22%', left: '14%', width: '260px', height: '300px' },
+    stars: [
+      {x:50,y:2},{x:20,y:18},{x:80,y:18},          // shoulders + head-ish
+      {x:38,y:48},{x:50,y:52},{x:62,y:48},          // belt
+      {x:22,y:88},{x:78,y:90}                        // feet
+    ],
+    lines: [[0,1],[0,2],[1,3],[2,5],[3,4],[4,5],[3,6],[5,7]],
+    labelPos:{x:50,y:100},
+    starInfo: [
+      { name:'Betelgeuse', fact:'A red supergiant so vast that if it replaced the Sun, its surface would reach past the orbit of Jupiter. It is expected to end its life as a supernova.' },
+      { name:'Bellatrix', fact:'A blue giant nicknamed the Amazon Star, burning hot and blue-white despite its modest size.' },
+      { name:'Meissa', fact:'Marking the hunter\'s head, a young, hot star still wrapped in the glow of the nebula it was born from.' },
+      { name:'Mintaka', fact:'The westernmost star of the belt — not one star but a tight system of several, orbiting each other closely.' },
+      { name:'Alnilam', fact:'The belt\'s brightest star, a blue supergiant shedding mass so quickly it may not survive another million years.' },
+      { name:'Alnitak', fact:'The belt\'s easternmost star, a triple system whose radiation carves the glow of the nearby Flame Nebula.' },
+      { name:'Saiph', fact:'A blue supergiant nearly as hot as Rigel, only dimmer to the eye because it sits a little further away.' },
+      { name:'Rigel', fact:'One of the most luminous stars visible to the naked eye, blazing thousands of times brighter than the Sun.' }
+    ]
+  },
+  {
+    id: 'cassiopeia',
+    name: 'Cassiopeia',
+    myth: 'The Queen',
+    box: { top: '14%', left: '58%', width: '220px', height: '140px' },
+    stars: [
+      {x:5,y:70},{x:28,y:10},{x:52,y:60},{x:76,y:6},{x:98,y:55}
+    ],
+    lines: [[0,1],[1,2],[2,3],[3,4]],
+    labelPos:{x:50,y:100},
+    starInfo: [
+      { name:'Segin', fact:'A hot blue-white star marking the edge of the queen\'s throne, one of the least-studied stars in the constellation.' },
+      { name:'Ruchbah', fact:'A star nearing the end of its main sequence, slowly swelling as the fuel in its core runs low.' },
+      { name:'Navi', fact:'An unstable blue star known to erupt without warning, shedding rings of gas into the space around it.' },
+      { name:'Schedar', fact:'An orange giant near the end of its life, cooler and older than the Sun, casting an amber light.' },
+      { name:'Caph', fact:'A rapidly rotating white star, spinning so fast that it has visibly flattened at its poles.' }
+    ]
+  },
+  {
+    id: 'ursa-major',
+    name: 'Ursa Major',
+    myth: 'The Great Bear',
+    box: { top: '55%', left: '30%', width: '280px', height: '160px' },
+    stars: [
+      {x:4,y:60},{x:26,y:40},{x:48,y:50},{x:70,y:30},
+      {x:78,y:55},{x:92,y:48},{x:98,y:70},{x:60,y:78}
+    ],
+    lines: [[0,1],[1,2],[2,3],[3,4],[4,5],[5,6],[2,7]],
+    labelPos:{x:50,y:100},
+    starInfo: [
+      { name:'Talitha', fact:'A quiet binary pair marking one of the bear\'s paws — easy to overlook, but with a rhythm of its own.' },
+      { name:'Dubhe', fact:'An orange giant paired with a smaller companion, together forming one of the sky\'s brightest binaries.' },
+      { name:'Merak', fact:'A white main-sequence star once thought to be circled by a disk of debris still forming into planets.' },
+      { name:'Phecda', fact:'A blue-white star spinning so quickly that its shape visibly bulges at the equator.' },
+      { name:'Megrez', fact:'The dimmest of the Dipper\'s stars, marking the point where its handle meets its bowl.' },
+      { name:'Alioth', fact:'The brightest star in Ursa Major, with a magnetic field that measurably shifts its own brightness over time.' },
+      { name:'Mizar', fact:'Famous as the first star ever photographed, and itself part of a system of at least four stars.' },
+      { name:'Alkaid', fact:'A young, hot blue star marking the tip of the Dipper\'s handle — bright, fast-burning, and short-lived.' }
+    ]
+  },
+  {
+    id: 'lyra',
+    name: 'Lyra',
+    myth: 'The Lyre',
+    box: { top: '10%', left: '145%', width: '160px', height: '150px' },
+    stars: [ {x:50,y:5},{x:20,y:50},{x:80,y:50},{x:30,y:90},{x:70,y:90} ],
+    starInfo: [
+      { name:'Vega', fact:'One of the brightest stars in the sky and one of the most-studied — the second star, after the Sun, ever photographed.' },
+      { name:'Sheliak', fact:'An eclipsing binary so close together that the two stars are slowly siphoning material from one another.' },
+      { name:'Sulafat', fact:'A blue-white giant marking the base of the lyre, several thousand times brighter than the Sun.' },
+      { name:'Delta Lyrae', fact:'Actually two stars of very different colors sitting near each other in the sky, though not truly bound together.' },
+      { name:'Zeta Lyrae', fact:'A close double star that resolves into two separate points of light through even a modest telescope.' }
+    ]
+  },
+  {
+    id: 'cygnus',
+    name: 'Cygnus',
+    myth: 'The Swan',
+    box: { top: '38%', left: '188%', width: '240px', height: '220px' },
+    stars: [ {x:50,y:5},{x:50,y:35},{x:15,y:50},{x:85,y:50},{x:50,y:90},{x:35,y:20} ],
+    starInfo: [
+      { name:'Deneb', fact:'One of the most luminous stars known, so far away that its light left before human civilization began.' },
+      { name:'Sadr', fact:'Marks the swan\'s chest, a yellow-white supergiant embedded in a rich field of surrounding nebulosity.' },
+      { name:'Gienah', fact:'A giant star marking the swan\'s wing, cooler and more orange than most stars visible to the naked eye.' },
+      { name:'Delta Cygni', fact:'A close binary pair that takes several centuries to complete a single orbit around each other.' },
+      { name:'Albireo', fact:'Famous for splitting into a striking pair of gold and blue stars when viewed through a telescope.' },
+      { name:'Fawaris', fact:'Marks the swan\'s other wing, a giant star quietly balancing the shape of the cross.' }
+    ]
+  },
+  {
+    id: 'draco',
+    name: 'Draco',
+    myth: 'The Dragon',
+    box: { top: '68%', left: '148%', width: '300px', height: '180px' },
+    stars: [ {x:10,y:20},{x:25,y:10},{x:40,y:25},{x:55,y:15},{x:70,y:30},{x:85,y:20},{x:95,y:45} ],
+    starInfo: [
+      { name:'Thuban', fact:'Once the North Star, thousands of years ago, before the slow wobble of Earth\'s axis moved the role elsewhere.' },
+      { name:'Eltanin', fact:'The dragon\'s brightest eye, an orange giant that will keep swelling further as it continues to age.' },
+      { name:'Rastaban', fact:'Sits beside Eltanin marking the dragon\'s other eye, a duller companion to its brighter neighbor.' },
+      { name:'Altais', fact:'A modest star marking a bend partway along the dragon\'s long, winding tail.' },
+      { name:'Grumium', fact:'Marks the dragon\'s jaw, a cool giant star near the head of the constellation.' },
+      { name:'Aldhibain', fact:'One of several faint stars tracing the dragon\'s coils across a wide stretch of sky.' },
+      { name:'Edasich', fact:'A star with a confirmed planet orbiting it, discovered circling this very point in the dragon\'s tail.' }
+    ]
+  },
+  {
+    id: 'perseus',
+    name: 'Perseus',
+    myth: 'The Hero',
+    box: { top: '132%', left: '22%', width: '260px', height: '220px' },
+    stars: [ {x:15,y:20},{x:35,y:10},{x:50,y:35},{x:65,y:20},{x:80,y:45},{x:60,y:70} ],
+    starInfo: [
+      { name:'Mirfak', fact:'The brightest star in Perseus, a yellow-white supergiant embedded in a loose, glittering star cluster.' },
+      { name:'Algol', fact:'Nicknamed the Demon Star, famous for visibly dimming every few days as a fainter companion passes in front of it.' },
+      { name:'Menkib', fact:'A blue supergiant so hot and energetic that it outshines the Sun by an extraordinary margin.' },
+      { name:'Atik', fact:'A close binary pair whose two stars are just barely far enough apart to be seen separately.' },
+      { name:'Miram', fact:'A yellow supergiant marking part of the hero\'s outstretched arm.' },
+      { name:'Gorgonea Tertia', fact:'One of several faint stars historically grouped with Algol as part of the Gorgon\'s head.' }
+    ]
+  },
+  {
+    id: 'andromeda',
+    name: 'Andromeda',
+    myth: 'The Chained Princess',
+    box: { top: '148%', left: '108%', width: '240px', height: '160px' },
+    stars: [ {x:10,y:50},{x:32,y:35},{x:55,y:45},{x:75,y:30},{x:95,y:40} ],
+    starInfo: [
+      { name:'Alpheratz', fact:'Shared between two constellations at once, marking both the princess\'s head and a corner of Pegasus\'s square.' },
+      { name:'Mirach', fact:'A cool red giant used by astronomers as a marker star for locating nearby galaxies.' },
+      { name:'Almach', fact:'A colorful multiple-star system, prized by observers for the contrast between its gold and blue components.' },
+      { name:'Delta Andromedae', fact:'An orange giant marking the princess\'s waist, considerably cooler than the Sun.' },
+      { name:'Adhil', fact:'A faint, easily overlooked star marking the end of the chain that once bound the princess to her rock.' }
+    ]
+  },
+  {
+    id: 'pegasus',
+    name: 'Pegasus',
+    myth: 'The Winged Horse',
+    box: { top: '172%', left: '182%', width: '260px', height: '220px' },
+    stars: [ {x:25,y:15},{x:75,y:15},{x:75,y:75},{x:25,y:75},{x:50,y:95},{x:5,y:50} ],
+    starInfo: [
+      { name:'Markab', fact:'Marks the flying horse\'s shoulder, one corner of the four-star shape known as the Great Square.' },
+      { name:'Scheat', fact:'A cool red giant so large that it has begun to swell and shed material into the space around it.' },
+      { name:'Algenib', fact:'Marks the horse\'s wing tip, a hot blue star anchoring another corner of the Great Square.' },
+      { name:'Enif', fact:'Marks the horse\'s nose, an orange supergiant considerably larger and cooler than the Sun.' },
+      { name:'Homam', fact:'A modest star marking part of the horse\'s body, less prominent than its square-marking neighbors.' },
+      { name:'Matar', fact:'Marks the horse\'s neck, part of the sweeping line of stars that gives Pegasus its shape.' }
+    ]
+  },
+  {
+    id: 'aquila',
+    name: 'Aquila',
+    myth: 'The Eagle',
+    box: { top: '188%', left: '55%', width: '220px', height: '190px' },
+    stars: [ {x:50,y:10},{x:20,y:50},{x:80,y:50},{x:50,y:90},{x:50,y:50} ],
+    starInfo: [
+      { name:'Altair', fact:'One of the closest bright stars to Earth, spinning so fast that it visibly bulges at its equator.' },
+      { name:'Tarazed', fact:'An orange giant marking one side of the eagle\'s outstretched wings.' },
+      { name:'Alshain', fact:'Marks the eagle\'s other wing, forming a distinctive line together with Altair and Tarazed.' },
+      { name:'Deneb el Okab', fact:'Marks part of the eagle\'s tail, fainter and less studied than the stars marking its wings.' },
+      { name:'Bezek', fact:'A quiet star completing the eagle\'s outline, easy to miss but part of the traditional shape.' }
+    ]
+  }
+];
+
+// Each star gets 3 procedurally-assembled planets so every one of the ~21 stars above
+// has its own small system, without hand-authoring dozens of nearly-identical entries.
+const PLANET_ARCHETYPES = [
+  { color:'#8FB8D9', fact: s => `A frozen world whose ice sheets scatter ${s}'s light into faint bands of color across the horizon.` },
+  { color:'#C97D5D', fact: s => `A volcanic world in constant renewal, its surface reshaped by slow rivers of molten rock under ${s}'s glow.` },
+  { color:'#E8C468', hasRing:true, fact: s => `A ringed giant orbiting far from ${s}, its bands the remains of a moon it once held close.` },
+  { color:'#6FA8A0', fact: s => `An ocean world beneath a thin sky, its tides pulled taut by ${s}'s steady gravity.` },
+  { color:'#9E7DB8', fact: s => `A storm-wracked giant, its face in constant motion beneath bands of churning violet cloud.` },
+  { color:'#D9A05B', fact: s => `A wind-scoured desert world, its dunes reshaped with every pass around ${s}.` },
+  { color:'#B8899E', fact: s => `Tidally locked to ${s} — one face burns in endless day while the other keeps a permanent night.` },
+  { color:'#D9C7E0', fact: s => `A crystalline world that fractures ${s}'s light into scattered color, faintly audible in a strong stellar wind.` }
+];
+function makePlanets(starName, seed){
+  const suffixes = ['I','II','III'];
+  const planets = [];
+  for(let i=0;i<3;i++){
+    const arch = PLANET_ARCHETYPES[(seed + i*3) % PLANET_ARCHETYPES.length];
+    planets.push({
+      name: `${starName} ${suffixes[i]}`,
+      color: arch.color,
+      size: 14 + i*5,
+      orbit: 90 + i*65,
+      speed: 20 + i*15 + (seed % 5),
+      hasRing: !!arch.hasRing && i === 2,
+      fact: arch.fact(starName)
+    });
+  }
+  return planets;
+}
+
+/* ============ Sound ============
+   Drop your own files into an "assets/sounds" folder next to this HTML file,
+   named exactly as below. Nothing breaks if a file is missing — it just stays silent
+   until you add it. ambient loops softly once the intro is dismissed; the others
+   are one-shot cues tied to specific moments.
+*/
+const SOUND_FILES = {
+  ambient: 'assets/sounds/ambient.mp3',   // soft background pad, loops
+  whoosh:  'assets/sounds/whoosh.mp3',    // entering/leaving a star's solar system
+  chime:   'assets/sounds/chime.mp3',     // focusing on a planet or sun
+  enter:   'assets/sounds/enter.mp3'      // stepping inside a planet
+};
+const audioCache = {};
+let soundOn = true;
+let audioUnlocked = false;
+
+function getAudio(key){
+  if(!audioCache[key]){
+    const a = new Audio(SOUND_FILES[key]);
+    a.volume = key === 'ambient' ? 0.32 : 0.5;
+    if(key === 'ambient') a.loop = true;
+    audioCache[key] = a;
+  }
+  return audioCache[key];
+}
+function playSound(key){
+  if(!soundOn) return;
+  try{
+    const a = getAudio(key);
+    if(key !== 'ambient') a.currentTime = 0;
+    a.play().catch(()=>{ /* file not added yet, or blocked — silently ignore */ });
+  }catch(e){ /* ignore */ }
+}
+function unlockAudio(){
+  if(audioUnlocked) return;
+  audioUnlocked = true;
+  if(soundOn) playSound('ambient');
+}
+
+const soundToggle = document.getElementById('sound-toggle');
+soundToggle.addEventListener('click', ()=>{
+  soundOn = !soundOn;
+  soundToggle.textContent = soundOn ? 'Sound: On' : 'Sound: Off';
+  const ambient = audioCache.ambient;
+  if(ambient){
+    if(soundOn) ambient.play().catch(()=>{});
+    else ambient.pause();
+  }
+});
+
+const helpToggle = document.getElementById('help-toggle');
+const helpPanel = document.getElementById('help-panel');
+helpToggle.addEventListener('click', (e)=>{
+  e.stopPropagation();
+  helpPanel.classList.toggle('open');
+});
+document.addEventListener('click', (e)=>{
+  if(helpPanel.classList.contains('open') && !helpPanel.contains(e.target) && e.target !== helpToggle){
+    helpPanel.classList.remove('open');
+  }
+});
+document.addEventListener('keydown', (e)=>{
+  if(e.key === 'Escape') helpPanel.classList.remove('open');
+});
+
+/* ============ Cinematic intro ============ */
+const introOverlay = document.getElementById('intro-overlay');
+const introLines = Array.from(document.querySelectorAll('.intro-line'));
+const introHint = document.getElementById('intro-enter-hint');
+let introDismissed = false;
+
+function runIntroSequence(){
+  const timings = [600, 3000, 5600]; // when each line becomes active (ms)
+  const holdBeforeNext = [2200, 2200]; // when a line starts fading out, relative to its own entrance
+  introLines.forEach((line, i)=>{
+    setTimeout(()=> line.classList.add('active'), timings[i]);
+    if(i < introLines.length - 1){
+      setTimeout(()=> line.classList.add('gone'), timings[i] + holdBeforeNext[i]);
+    }
+  });
+  setTimeout(()=> introHint.classList.add('active'), timings[timings.length-1] + 1600);
+}
+runIntroSequence();
+
+function dismissIntro(){
+  if(introDismissed) return;
+  introDismissed = true;
+  unlockAudio();
+  soundToggle.classList.add('visible');
+  introOverlay.classList.add('dismissed');
+}
+introOverlay.addEventListener('click', dismissIntro);
+introOverlay.addEventListener('touchstart', dismissIntro, { passive:true });
+document.addEventListener('keydown', (e)=>{
+  if(!introDismissed && (e.key === 'Enter' || e.key === ' ')) dismissIntro();
+});
+
+/* ============ The draggable, wrap-around world ============
+   The sky is bigger than the screen in every direction. World_W/World_H
+   define how far you can drag before it loops back to where it started.
+   Only ONE full copy of each star (with its real sun+planets) ever exists —
+   it lives in the "primary" quadrant. The other three quadrants that tile
+   around it hold cheap visual echoes: same look, same click/hover behavior,
+   but no solar-system DOM underneath. A 2x2 tile is enough to always cover
+   the screen for any (wrapped) drag position, however far you've dragged. */
+let WORLD_W = window.innerWidth * 2.6;
+let WORLD_H = window.innerHeight * 2.3;
+let dragOffsetX = 0, dragOffsetY = 0; // continuous, unwrapped — can grow or shrink without limit
+const worldLayer = document.getElementById('world-layer');
+const PAN_EASE_FN = t => 1 - Math.pow(1-t, 3); // easeOutCubic, used for both manual drag-release and the pan-to-center tween
+
+function wrapValue(v, size){ return ((v % size) + size) % size; }
+function applyWorldTransform(){
+  const wx = wrapValue(dragOffsetX, WORLD_W);
+  const wy = wrapValue(dragOffsetY, WORLD_H);
+  worldLayer.style.transform = `translate(${wx}px, ${wy}px)`;
+}
+
+/* ============ Ambient starfield ============ */
+const canvas = document.getElementById('bg');
+const ctx = canvas.getContext('2d');
+let stars = [];
+function resizeCanvas(){
+  canvas.width = window.innerWidth;
+  canvas.height = window.innerHeight;
+  stars = [];
+  // density matches the full draggable world, not just the viewport, since
+  // stars are distributed across the whole thing and revealed as you drag
+  const count = Math.floor((WORLD_W*WORLD_H)/9000);
+  for(let i=0;i<count;i++){
+    stars.push({
+      x: Math.random()*WORLD_W, // world coordinates, not screen-local
+      y: Math.random()*WORLD_H,
+      r: Math.random()*1.2+0.2,
+      phase: Math.random()*Math.PI*2,
+      speed: 0.4+Math.random()*0.8
+    });
+  }
+}
+window.addEventListener('resize', resizeCanvas);
+resizeCanvas();
+
+// Maps a star's world coordinate to where it should be drawn on the canvas
+// right now, given the current drag offset — wrapping to whichever repeat
+// (this tile, one world-width left/right, one world-height up/down) is
+// nearest the visible area, so stars seamlessly slide in from the opposite
+// edge as they leave one side.
+function worldToCanvasX(worldX){
+  const local = wrapValue(worldX + dragOffsetX, WORLD_W);
+  return local <= WORLD_W/2 ? local : local - WORLD_W;
+}
+function worldToCanvasY(worldY){
+  const local = wrapValue(worldY + dragOffsetY, WORLD_H);
+  return local <= WORLD_H/2 ? local : local - WORLD_H;
+}
+
+let t=0;
+
+// Background warp: when a star zoom begins, the ambient starfield streaks
+// away from (entering) or converges toward (exiting) the same point the
+// solar system is animating from/to — same duration, same easing — so the
+// whole scene reads as one continuous motion instead of a static backdrop.
+let bgWarp = null; // { trackEl, fallbackCx, fallbackCy, startTime, duration, sign }
+function triggerBgWarp(trackEl, fallbackCx, fallbackCy, sign){
+  bgWarp = { trackEl, fallbackCx, fallbackCy, startTime: performance.now(), duration: ZOOM_MS, sign };
+  setTimeout(()=>{ bgWarp = null; }, ZOOM_MS);
+}
+function easeOutCubic(p){ return 1 - Math.pow(1-p, 3); }
+
+function drawBg(){
+  t+=0.016;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+
+  let warp = null;
+  if(bgWarp){
+    const raw = Math.min(1, (performance.now() - bgWarp.startTime) / bgWarp.duration);
+    let wx, wy;
+    if(bgWarp.trackEl){
+      const r = bgWarp.trackEl.getBoundingClientRect();
+      if(r.width > 0){ wx = r.left + r.width/2; wy = r.top + r.height/2; }
+    }
+    if(wx === undefined){ wx = bgWarp.fallbackCx; wy = bgWarp.fallbackCy; }
+    warp = { progress: easeOutCubic(raw), cx: wx, cy: wy, sign: bgWarp.sign };
+  }
+
+  for(const s of stars){
+    const sx0 = worldToCanvasX(s.x);
+    const sy0 = worldToCanvasY(s.y);
+    // off-canvas by more than a hair — skip, nothing else to do for this star this frame
+    if(sx0 < -5 || sx0 > canvas.width+5 || sy0 < -5 || sy0 > canvas.height+5) continue;
+
+    const twinkle = 0.5 + 0.5*Math.sin(t*s.speed + s.phase);
+    const alpha = 0.25+0.55*twinkle;
+
+    if(!warp){
+      ctx.beginPath();
+      ctx.arc(sx0, sy0, s.r, 0, Math.PI*2);
+      ctx.fillStyle = `rgba(241,238,227,${alpha})`;
+      ctx.fill();
+      continue;
+    }
+
+    // displace radially from the warp's focal point — farther stars move
+    // more, giving a perspective "flying past" feel — and draw as a short
+    // streak along that path rather than a static dot
+    const dx = sx0 - warp.cx, dy = sy0 - warp.cy;
+    const dist = Math.sqrt(dx*dx + dy*dy) || 1;
+    const nx = dx/dist, ny = dy/dist;
+    const displacement = warp.sign * warp.progress * (dist*0.55 + 30);
+    const ex = sx0 + nx*displacement;
+    const ey = sy0 + ny*displacement;
+    const sx = ex - nx*displacement*0.4;
+    const sy = ey - ny*displacement*0.4;
+
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(ex, ey);
+    ctx.strokeStyle = `rgba(241,238,227,${alpha})`;
+    ctx.lineWidth = Math.max(0.4, s.r);
+    ctx.lineCap = 'round';
+    ctx.stroke();
+  }
+  requestAnimationFrame(drawBg);
+}
+drawBg();
+
+/* ============ Coordinate readout + pointer tracking ============ */
+const coordsEl = document.getElementById('coords-readout');
+const lastPointer = { x: window.innerWidth/2, y: window.innerHeight/2 };
+function randCoord(){
+  const ra = (Math.random()*24).toFixed(2);
+  const dec = (Math.random()*180-90).toFixed(2);
+  return `RA ${ra}h &nbsp; DEC ${dec}&deg;`;
+}
+coordsEl.innerHTML = randCoord();
+document.addEventListener('mousemove', (e)=>{
+  lastPointer.x = e.clientX;
+  lastPointer.y = e.clientY;
+  const ra = ((e.clientX/window.innerWidth)*24).toFixed(2);
+  const dec = ((0.5-e.clientY/window.innerHeight)*180).toFixed(2);
+  coordsEl.innerHTML = `RA ${ra}h &nbsp; DEC ${dec}&deg;`;
+});
+
+/* ============ Constants for the star <-> system zoom ============ */
+const ORBIT_FIELD_PX = 640;   // each star's solar system is designed at this fixed size...
+const REST_SCALE = 0.014;     // ...then scaled down to ~9px for its resting appearance in the sky
+const ZOOM_MS = 1150;         // shared duration for growing in AND shrinking back out
+const ZOOM_EASE = 'cubic-bezier(.22,.4,.2,1)'; // used for the single transform (translate+scale) that drives the whole zoom
+const PAN_MS = 850;           // how long the sky takes to recenter on the chosen star before the zoom begins
+const skyView = document.getElementById('sky-view');
+
+const starRegistry = {}; // starId -> { anchorEl, systemEl, flareEl, sunEl, orbitFieldEl, name, myth, constellationName }
+let activeStarId = null;
+let zoomBusy = false;    // true for the full duration of either the entry or exit animation
+let hoveredStar = null; // {id, el} — the star-anchor currently under the pointer, at rest in the sky
+
+/* ============ Build one star's persistent solar system ============ */
+function buildStarSystem(wrap, starId, x, y, starName, starFact, myth, constellationName, planets){
+  const anchor = document.createElement('div');
+  anchor.className = 'star-anchor';
+  anchor.style.left = x + '%';
+  anchor.style.top = y + '%';
+  anchor.title = starName;
+
+  const starSystem = document.createElement('div');
+  starSystem.className = 'star-system';
+
+  const orbitField = document.createElement('div');
+  orbitField.className = 'orbit-field';
+
+  // orbit rings
+  planets.forEach(p=>{
+    const ring = document.createElement('div');
+    ring.className='orbit';
+    ring.style.width = (p.orbit*2)+'px';
+    ring.style.height = (p.orbit*2)+'px';
+    orbitField.appendChild(ring);
+  });
+
+  // sun — the star itself. Starts in its resting "flare" state: oversized,
+  // blinding. That's what this system looks like from far away.
+  const sun = document.createElement('div');
+  sun.className = 'sun flare';
+  sun.style.width = '70px';
+  sun.style.height = '70px';
+  sun._baseStyle = sun.getAttribute('style');
+  sun._data = { eyebrow:'The Star', name:starName, fact:starFact, color:'#E8C468' };
+  sun.addEventListener('click', (e)=>{
+    e.stopPropagation();
+    if(activeStarId === starId) handleBodyClick(sun, null, orbitField);
+  });
+  sun.addEventListener('mouseenter', ()=>{
+    if(activeStarId === starId) hoveredBody = { el: sun, pivot: null, scene: orbitField };
+  });
+  sun.addEventListener('mouseleave', ()=>{
+    if(hoveredBody && hoveredBody.el === sun) hoveredBody = null;
+  });
+  orbitField.appendChild(sun);
+
+  // planets, each in its own spinning pivot for orbit animation
+  planets.forEach(p=>{
+    const pivot = document.createElement('div');
+    pivot.className='orbit-spin';
+    pivot.style.animationDuration = p.speed+'s';
+    pivot.style.animationDelay = (-Math.random()*p.speed)+'s';
+
+    const planet = document.createElement('div');
+    planet.className='planet';
+    planet.style.width = p.size+'px';
+    planet.style.height = p.size+'px';
+    planet.style.background = `radial-gradient(circle at 35% 35%, #fff8, ${p.color})`;
+    planet.style.transform = `translate(${p.orbit}px, -${p.size/2}px)`;
+
+    if(p.hasRing){
+      const ring = document.createElement('div');
+      ring.className='planet-ring';
+      ring.style.width = (p.size*1.9)+'px';
+      ring.style.height = (p.size*0.7)+'px';
+      ring.style.left = -(p.size*0.45)+'px';
+      ring.style.top = (p.size*0.15)+'px';
+      planet.style.position='relative';
+      planet.appendChild(ring);
+    }
+
+    planet._baseStyle = planet.getAttribute('style');
+    planet._data = { eyebrow:'Planet', name:p.name, fact:p.fact, color:p.color };
+
+    planet.addEventListener('click', (e)=>{
+      e.stopPropagation();
+      if(activeStarId === starId) handleBodyClick(planet, pivot, orbitField);
+    });
+    planet.addEventListener('mouseenter', ()=>{
+      if(activeStarId === starId) hoveredBody = { el: planet, pivot, scene: orbitField };
+    });
+    planet.addEventListener('mouseleave', ()=>{
+      if(hoveredBody && hoveredBody.el === planet) hoveredBody = null;
+    });
+
+    pivot.appendChild(planet);
+    orbitField.appendChild(pivot);
+  });
+
+  starSystem.appendChild(orbitField);
+
+  // the glare covering the whole system — opaque by default (resting/bright)
+  const flare = document.createElement('div');
+  flare.className = 'system-flare';
+  starSystem.appendChild(flare);
+
+  anchor.appendChild(starSystem);
+  wrap.appendChild(anchor);
+
+  anchor.addEventListener('click', ()=> zoomIntoStar(starId));
+  anchor.addEventListener('mouseenter', ()=>{ hoveredStar = { id: starId, el: anchor }; });
+  anchor.addEventListener('mouseleave', ()=>{
+    if(hoveredStar && hoveredStar.id === starId) hoveredStar = null;
+  });
+
+  starRegistry[starId] = {
+    anchorEl: anchor, systemEl: starSystem, flareEl: flare, sunEl: sun, orbitFieldEl: orbitField,
+    name: starName, myth, constellationName
+  };
+}
+
+/* ============ Build a lightweight echo of a star (tiled quadrants) ============
+   No sun, no planets, no flare — just a small glowing dot with the same hit
+   area and hover-grow, standing in for the star wherever it repeats. Clicking
+   or scrolling into an echo zooms in exactly like the primary, just starting
+   from the echo's own position on screen. */
+function buildStarEcho(wrap, starId, x, y){
+  const anchor = document.createElement('div');
+  anchor.className = 'star-anchor';
+  anchor.style.left = x + '%';
+  anchor.style.top = y + '%';
+
+  const echo = document.createElement('div');
+  echo.className = 'star-echo';
+  anchor.appendChild(echo);
+  wrap.appendChild(anchor);
+
+  anchor.addEventListener('click', ()=> zoomIntoStar(starId, anchor));
+  anchor.addEventListener('mouseenter', ()=>{ hoveredStar = { id: starId, el: anchor }; });
+  anchor.addEventListener('mouseleave', ()=>{
+    if(hoveredStar && hoveredStar.id === starId) hoveredStar = null;
+  });
+}
+
+/* ============ Build the tiled world: one primary quadrant + three echoes ============ */
+const QUADRANTS = [
+  { x: 0, y: 0, primary: true },        // the real stars live here
+  { x: -1, y: 0, primary: false },      // tiles to the left
+  { x: 0, y: -1, primary: false },      // tiles above
+  { x: -1, y: -1, primary: false }      // tiles diagonally
+];
+
+QUADRANTS.forEach(q=>{
+  const quadrant = document.createElement('div');
+  quadrant.className = 'sky-quadrant';
+  quadrant.style.left = (q.x * WORLD_W) + 'px';
+  quadrant.style.top = (q.y * WORLD_H) + 'px';
+
+  CONSTELLATIONS.forEach(c => {
+    const wrap = document.createElement('div');
+    wrap.className = 'constellation';
+    wrap.style.top = c.box.top;
+    wrap.style.left = c.box.left;
+    wrap.style.width = c.box.width;
+    wrap.style.height = c.box.height;
+    wrap.dataset.id = c.id;
+
+    c.stars.forEach((s, i)=>{
+      const starId = `${c.id}-${i}`;
+      if(q.primary){
+        const info = c.starInfo[i];
+        const planets = makePlanets(info.name, i + c.id.length);
+        buildStarSystem(wrap, starId, s.x, s.y, info.name, info.fact, c.myth, c.name, planets);
+      } else {
+        buildStarEcho(wrap, starId, s.x, s.y);
+      }
+    });
+
+    quadrant.appendChild(wrap);
+  });
+
+  worldLayer.appendChild(quadrant);
+});
+
+window.addEventListener('resize', ()=>{
+  WORLD_W = window.innerWidth * 2.6;
+  WORLD_H = window.innerHeight * 2.3;
+  QUADRANTS.forEach((q, i)=>{
+    const quadrant = worldLayer.children[i];
+    quadrant.style.left = (q.x * WORLD_W) + 'px';
+    quadrant.style.top = (q.y * WORLD_H) + 'px';
+  });
+  applyWorldTransform();
+});
+
+/* ============ Dimming the rest of the sky while one star is open ============ */
+function dimSky(){
+  document.querySelectorAll('.star-anchor').forEach(a=>{
+    a.style.transition = 'opacity 500ms ease';
+    a.style.opacity = '0';
+    a.style.pointerEvents = 'none';
+  });
+}
+function undimSky(){
+  document.querySelectorAll('.star-anchor').forEach(a=>{
+    a.style.opacity = '';
+    a.style.pointerEvents = '';
+  });
+}
+
+/* ============ HUD (title + back button while a system is open) ============ */
+const systemHud = document.getElementById('system-hud');
+const hudStarName = document.getElementById('hud-star-name');
+const hudStarSub = document.getElementById('hud-star-sub');
+const hudBack = document.getElementById('hud-back');
+
+function showHud(s){
+  hudStarName.textContent = s.name;
+  hudStarSub.textContent = `${s.constellationName} \u2014 ${s.myth}`;
+  systemHud.classList.add('visible');
+}
+function hideHud(){
+  systemHud.classList.remove('visible');
+}
+
+/* ============ The single continuous zoom: sky <-> solar system ============
+   There's no scene swap here. Each star's solar system is a real, persistent
+   element sitting at its sky position, resting at a tiny scale with its glare
+   at full brightness. Entering just grows that same element and clears its
+   glare; leaving is the literal reverse — one continuous motion either way.
+
+   Both position and size are driven by a single `transform: translate() scale()`
+   (never left/top) — transform-only animation is the reliable, GPU-composited
+   way to do this, and avoids a real quirk we hit mixing left/top transitions
+   with a simultaneous transform on this element: left/top would jump to their
+   target almost immediately while the scale kept animating gradually,
+   throwing the position and size out of sync with each other. */
+function starTransform(cx, cy, scale){
+  const half = (ORBIT_FIELD_PX/2) * scale;
+  return `translate(${cx-half}px, ${cy-half}px) scale(${scale})`;
+}
+
+// Animates dragOffsetX/Y toward a target over `duration`ms — this is the one
+// mechanism behind both manual dragging and the pan-to-center phase of a
+// zoom; the background canvas reads these same values every frame, so it
+// always stays in sync automatically without any separate CSS transform.
+function tweenOffsetBy(deltaX, deltaY, duration, onDone){
+  const startX = dragOffsetX, startY = dragOffsetY;
+  const t0 = performance.now();
+  function step(){
+    const raw = Math.min(1, (performance.now()-t0)/duration);
+    const eased = PAN_EASE_FN(raw);
+    dragOffsetX = startX + deltaX*eased;
+    dragOffsetY = startY + deltaY*eased;
+    applyWorldTransform();
+    if(raw < 1) requestAnimationFrame(step);
+    else if(onDone) onDone();
+  }
+  requestAnimationFrame(step);
+}
+
+let lastPanDelta = { x: 0, y: 0 }; // so exitStar can reverse phase 1 exactly, regardless of which quadrant's copy was clicked
+
+function zoomIntoStar(starId, originEl){
+  if(activeStarId || current || zoomBusy) return; // already zoomed in, or busy with a transition
+  if(suppressNextClick){ suppressNextClick = false; return; } // this click was really the release of a drag
+  const s = starRegistry[starId];
+  if(!s) return;
+  if(!originEl) originEl = s.anchorEl;
+
+  zoomBusy = true;
+  playSound('whoosh');
+  systemPanX = 0;
+  systemPanY = 0;
+
+  // Phase 1: pan the whole world — background stars and all — so the chosen
+  // star (wherever its clicked copy was) ends up centered, like turning to
+  // face it before flying toward it.
+  const originRect0 = originEl.getBoundingClientRect();
+  const dx = window.innerWidth/2 - (originRect0.left + originRect0.width/2);
+  const dy = window.innerHeight/2 - (originRect0.top + originRect0.height/2);
+  lastPanDelta = { x: dx, y: dy };
+
+  tweenOffsetBy(dx, dy, PAN_MS, ()=>{
+    // Phase 2: now centered — dim the rest of the sky and grow into the system
+    dimSky();
+    activeStarId = starId;
+
+    const el = s.systemEl;
+    // Phase 1 guaranteed the clicked origin (primary or one of its echoes)
+    // is now exactly centered — so center IS the right starting point here,
+    // regardless of which copy was clicked. Querying s.anchorEl specifically
+    // was the bug: for an echo click, the primary anchor lives in a
+    // different quadrant and usually isn't anywhere near center, so the
+    // animation would start from the wrong (often off-screen) spot.
+    const ax = window.innerWidth/2;
+    const ay = window.innerHeight/2;
+    triggerBgWarp(el, ax, ay, 1);
+
+    // Switch to fixed positioning while preserving the exact current visual
+    // spot (same center point, same REST_SCALE) — width/height stay at their
+    // native 640px design size the whole time; only the transform moves.
+    // Reparent to <body> first: a transformed ancestor becomes the
+    // containing block for any position:fixed descendant — left inside
+    // world-layer, "fixed" would resolve relative to its dragged/panned box
+    // instead of the real viewport.
+    document.body.appendChild(el);
+    el.style.position = 'fixed';
+    el.style.left = '0';
+    el.style.top = '0';
+    el.style.margin = '0';
+    el.style.transformOrigin = '0 0';
+    el.style.transform = starTransform(ax, ay, REST_SCALE);
+    el.style.zIndex = '15';
+    el.style.contain = 'none'; // contain:paint (kept on resting stars for performance) showed a faint square boundary at this scale
+
+    // The starting transform must be set and reflowed BEFORE the transition
+    // property is attached — attaching it first caused a real browser quirk
+    // where the translate() component of the starting transform got dropped
+    // (computed style fell back to translate(0,0)), making every zoom-in
+    // animate from the viewport corner instead of the star's real position.
+    void el.offsetWidth; // force reflow so the starting transform is fully committed
+    el.style.transition = `transform ${ZOOM_MS}ms ${ZOOM_EASE}`;
+
+    const targetSize = Math.min(window.innerWidth, window.innerHeight) * 0.84;
+    const targetScale = targetSize / ORBIT_FIELD_PX;
+    s._settledScale = targetScale; // used later if the person drags to look around while zoomed in
+    requestAnimationFrame(()=>{
+      el.style.transform = starTransform(window.innerWidth/2, window.innerHeight/2, targetScale);
+    });
+
+    // the glare clears in sync with the growth — same duration, same easing
+    s.flareEl.classList.add('dimmed');
+    s.sunEl.classList.remove('flare');
+
+    // only the star you're actually looking at needs its planets spinning
+    s.orbitFieldEl.querySelectorAll('.orbit-spin').forEach(p=>{ p.style.animationPlayState = 'running'; });
+
+    // the sun and planets only become clickable once this star is the active one
+    s.sunEl.style.pointerEvents = 'auto';
+    s.orbitFieldEl.querySelectorAll('.planet').forEach(p=>{ p.style.pointerEvents = 'auto'; });
+
+    setTimeout(()=> showHud(s), ZOOM_MS - 200);
+    setTimeout(()=>{ zoomBusy = false; }, ZOOM_MS);
+  });
+}
+
+function exitStar(){
+  if(!activeStarId || current || zoomBusy) return;
+  const s = starRegistry[activeStarId];
+  zoomBusy = true;
+  hideHud();
+  playSound('whoosh');
+
+  const el = s.systemEl;
+  // Phase 1: shrink back down to resting scale from wherever it currently
+  // is. A freshly-zoomed star sits exactly at viewport center by design,
+  // but dragging while zoomed in (systemPanX/Y) can have moved it since —
+  // so account for that rather than assuming dead center.
+  const ax = window.innerWidth/2 + systemPanX;
+  const ay = window.innerHeight/2 + systemPanY;
+  triggerBgWarp(el, ax, ay, -1);
+
+  el.style.transition = `transform ${ZOOM_MS}ms ${ZOOM_EASE}`;
+  el.style.transform = starTransform(ax, ay, REST_SCALE);
+  systemPanX = 0;
+  systemPanY = 0;
+
+  // the glare returns as it shrinks back down — bright again, same duration
+  s.flareEl.classList.remove('dimmed');
+  s.sunEl.classList.add('flare');
+
+  // back to resting — not clickable again until this star is re-entered
+  s.orbitFieldEl.querySelectorAll('.orbit-spin').forEach(p=>{ p.style.animationPlayState = 'paused'; });
+  s.sunEl.style.pointerEvents = 'none';
+  s.orbitFieldEl.querySelectorAll('.planet').forEach(p=>{ p.style.pointerEvents = 'none'; });
+
+  activeStarId = null;
+
+  setTimeout(()=>{
+    s.anchorEl.appendChild(el); // move back home before clearing styles, so the resting position:absolute resolves against the anchor again
+    el.removeAttribute('style');
+    undimSky();
+
+    // Phase 2: pan the world back to exactly where it started — the literal
+    // reverse of phase 1 of zoomIntoStar.
+    tweenOffsetBy(-lastPanDelta.x, -lastPanDelta.y, PAN_MS, ()=>{
+      zoomBusy = false;
+    });
+  }, ZOOM_MS);
+}
+
+/* ============ Body focus + inside zoom (planet/sun close-up, within an open system) ============ */
+const focusCaption = document.getElementById('focus-caption');
+const fcEyebrow = document.getElementById('fc-eyebrow');
+const fcTitle = document.getElementById('fc-title');
+const fcBack = document.getElementById('fc-back');
+const insideScene = document.getElementById('inside-scene');
+const insideSurface = document.getElementById('inside-surface');
+const insideEyebrow = document.getElementById('inside-eyebrow');
+const insideTitle = document.getElementById('inside-title');
+const insideText = document.getElementById('inside-text');
+const insideBack = document.getElementById('inside-back');
+
+let hoveredBody = null; // {el, pivot, scene} — the sun or planet currently under the pointer
+let current = null;     // {el, pivot, scene, stage} of the body that's focused/inside, or null
+
+function dimSiblings(scene, keepEl){
+  const sun = scene.querySelector('.sun');
+  const pivots = scene.querySelectorAll('.orbit-spin');
+  const orbits = scene.querySelectorAll('.orbit');
+  [sun, ...pivots, ...orbits].forEach(el=>{
+    if(!el || el===keepEl) return;
+    el.style.transition = 'opacity 500ms ease';
+    el.style.opacity = '0';
+    el.style.pointerEvents = 'none';
+  });
+  systemHud.classList.add('dim');
+}
+function undimSiblings(scene){
+  const sun = scene.querySelector('.sun');
+  const pivots = scene.querySelectorAll('.orbit-spin');
+  const orbits = scene.querySelectorAll('.orbit');
+  [sun, ...pivots, ...orbits].forEach(el=>{
+    if(!el) return;
+    el.style.opacity = '';
+    el.style.pointerEvents = '';
+  });
+  systemHud.classList.remove('dim');
+}
+
+// Step 1 -> 2: click a body in the system view. Zoom it up close.
+function handleBodyClick(el, pivot, scene){
+  if(suppressNextClick){ suppressNextClick = false; return; } // this click was really the release of a drag
+  if(current && current.stage==='focused' && current.el===el){
+    // already focused on this body: second click goes inside
+    enterInside();
+    return;
+  }
+  if(current) return; // ignore clicks on other bodies mid-transition
+
+  if(pivot) pivot.style.animationPlayState = 'paused';
+  dimSiblings(scene, pivot || el);
+
+  const rect = el.getBoundingClientRect();
+  const cx = rect.left + rect.width/2;
+  const cy = rect.top + rect.height/2;
+
+  // Reparent to <body> first: the star-system ancestor carries an active
+  // transform once zoomed in, which makes it the containing block for any
+  // position:fixed descendant — left inside it, this would resolve relative
+  // to the star-system's box instead of the real viewport.
+  document.body.appendChild(el);
+  el.style.position = 'fixed';
+  el.style.margin = '0';
+  el.style.left = cx+'px';
+  el.style.top = cy+'px';
+  el.style.width = rect.width+'px';
+  el.style.height = rect.height+'px';
+  el.style.transform = 'translate(-50%,-50%) scale(1)';
+  el.style.zIndex = '55';
+  el.style.transition = 'left 950ms cubic-bezier(.2,.8,.2,1), top 950ms cubic-bezier(.2,.8,.2,1), transform 950ms cubic-bezier(.2,.8,.2,1)';
+
+  void el.offsetWidth; // force reflow so the transition catches
+  const targetSize = Math.min(window.innerWidth, window.innerHeight) * 0.42;
+  const scale = targetSize / rect.width;
+  requestAnimationFrame(()=>{
+    el.style.left = '50%';
+    el.style.top = '50%';
+    el.style.transform = `translate(-50%,-50%) scale(${scale})`;
+  });
+
+  current = { el, pivot, scene, stage:'focusing' };
+
+  setTimeout(()=>{
+    current.stage = 'focused';
+    fcEyebrow.textContent = el._data.eyebrow;
+    fcTitle.textContent = el._data.name;
+    focusCaption.classList.add('active');
+    playSound('chime');
+  }, 980);
+}
+
+// Back out of the close-up, returning to the full solar system
+function exitFocus(){
+  if(!current) return;
+  const { el, pivot, scene } = current;
+  focusCaption.classList.remove('active');
+
+  const base = el._baseStyle || '';
+  // shrink the close-up back down in place while the rest of the system fades back in
+  el.style.transition = 'transform 700ms cubic-bezier(.2,.8,.2,1), opacity 700ms ease';
+  el.style.transform = el.style.transform.replace(/scale\([^)]+\)/, 'scale(0.3)');
+  el.style.opacity = '0';
+
+  setTimeout(()=>{
+    (pivot || scene).appendChild(el); // move back home before restoring resting styles
+    el.setAttribute('style', base);
+    if(pivot) pivot.style.animationPlayState = 'running';
+    undimSiblings(scene);
+    current = null;
+  }, 800);
+}
+
+// Step 2 -> 3: second click on the close-up body goes inside it
+function enterInside(){
+  if(!current) return;
+  playSound('enter');
+  const { el } = current;
+  focusCaption.classList.remove('active');
+  insideSurface.style.setProperty('--inside-color', el._data.color);
+  insideSurface.style.background = `radial-gradient(circle at 40% 35%, ${el._data.color}, #05071480 85%)`;
+  insideEyebrow.textContent = el._data.eyebrow;
+  insideTitle.textContent = el._data.name;
+  insideText.textContent = el._data.fact;
+  insideScene.classList.add('active');
+  current.stage = 'inside';
+}
+
+// Step 3 -> 2: leave the inside view, return to the close-up
+function exitInside(){
+  insideScene.classList.remove('active');
+  if(current){
+    current.stage = 'focused';
+    focusCaption.classList.add('active');
+  }
+}
+
+hudBack.addEventListener('click', exitStar);
+fcBack.addEventListener('click', exitFocus);
+insideBack.addEventListener('click', exitInside);
+document.addEventListener('keydown', (e)=>{
+  if(e.key !== 'Escape') return;
+  if(current && current.stage === 'inside') exitInside();
+  else if(current && current.stage === 'focused') exitFocus();
+  else if(activeStarId) exitStar();
+});
+
+/* ============ Scroll-to-zoom, both directions ============
+   Scrolling in takes you deeper: hover a star and scroll in to enter its
+   system, hover the sun or a planet and scroll in to focus on it, then scroll
+   in again to go inside. Scrolling out always takes you back one level:
+   inside -> close-up -> full solar system -> sky. A short cooldown after each
+   step stops one scroll gesture from cascading through multiple levels at once.
+*/
+let stepCooldownActive = false;
+function stepCooldown(ms){
+  stepCooldownActive = true;
+  setTimeout(()=>{ stepCooldownActive = false; }, ms);
+}
+document.addEventListener('wheel', (e)=>{
+  if(stepCooldownActive) return;
+
+  const zoomingOut = e.deltaY > 12;
+  const zoomingIn = e.deltaY < -12;
+
+  if(zoomingOut){
+    if(insideScene.classList.contains('active')){
+      e.preventDefault();
+      stepCooldown(900);
+      exitInside();
+      return;
+    }
+    if(current && current.stage === 'focused'){
+      e.preventDefault();
+      stepCooldown(900);
+      exitFocus();
+      return;
+    }
+    if(activeStarId && !current){
+      e.preventDefault();
+      stepCooldown(PAN_MS + ZOOM_MS);
+      exitStar();
+      return;
+    }
+    return;
+  }
+
+  if(zoomingIn){
+    // already close-up on a body: scroll in again to step inside it
+    if(current && current.stage === 'focused'){
+      e.preventDefault();
+      stepCooldown(900);
+      enterInside();
+      return;
+    }
+    // inside an open solar system, hovering the sun or a planet: scroll in to focus it
+    if(activeStarId && !current && hoveredBody){
+      e.preventDefault();
+      stepCooldown(1000);
+      handleBodyClick(hoveredBody.el, hoveredBody.pivot, hoveredBody.scene);
+      return;
+    }
+    // out in the open sky, hovering a star: scroll in to enter its system
+    if(!activeStarId && !current && hoveredStar){
+      e.preventDefault();
+      stepCooldown(PAN_MS + ZOOM_MS);
+      zoomIntoStar(hoveredStar.id, hoveredStar.el);
+      return;
+    }
+  }
+}, { passive:false });
+
+/* ============ Click-and-drag to look around ============
+   The sky is bigger than the screen — drag to pan, and it wraps seamlessly
+   in every direction, eventually bringing you back to where you started.
+   Content follows the cursor directly, like dragging a photo. A small
+   movement threshold distinguishes a drag from a click, so tapping a star
+   still works normally.
+
+   The same drag works once you're inside a solar system, too: the sun and
+   its planets pan right along with the surrounding starfield, which keeps
+   wrapping infinitely behind them — so looking around a system feels like
+   the same continuous space as the sky, not a separate fixed diorama. */
+let isDragging = false;
+let dragMoved = false;
+let dragLastX = 0, dragLastY = 0;
+let suppressNextClick = false; // set true right after a real drag ends, so its release doesn't also fire a click on whatever's underneath
+let systemPanX = 0, systemPanY = 0; // extra offset applied to the zoomed-in solar system itself while dragging
+const DRAG_CLICK_THRESHOLD = 5; // px of total movement before it counts as a drag, not a click
+const DRAG_UI_EXCLUDE = 'header, #system-hud, .focus-caption, #inside-scene, #help-panel, #intro-overlay';
+
+function dragPointerDown(x, y, target){
+  if(zoomBusy || current) return; // not mid-transition, not focused on a specific body
+  if(target && target.closest && target.closest(DRAG_UI_EXCLUDE)) return; // let UI chrome handle its own clicks
+  isDragging = true;
+  dragMoved = false;
+  suppressNextClick = false;
+  dragLastX = x;
+  dragLastY = y;
+  document.body.classList.add('dragging');
+}
+function dragPointerMove(x, y){
+  if(!isDragging) return;
+  const dx = x - dragLastX;
+  const dy = y - dragLastY;
+  if(Math.abs(x - dragLastX) > DRAG_CLICK_THRESHOLD || Math.abs(y - dragLastY) > DRAG_CLICK_THRESHOLD || dragMoved){
+    dragMoved = true;
+  }
+  dragOffsetX += dx;
+  dragOffsetY += dy;
+  dragLastX = x;
+  dragLastY = y;
+  applyWorldTransform(); // keeps the background starfield panning/wrapping either way
+
+  if(activeStarId){
+    // also carry the zoomed-in solar system along with the drag, so it
+    // feels like one continuous space rather than a fixed picture sitting
+    // on top of a pannable background
+    const s = starRegistry[activeStarId];
+    systemPanX += dx;
+    systemPanY += dy;
+    s.systemEl.style.transform = starTransform(
+      window.innerWidth/2 + systemPanX,
+      window.innerHeight/2 + systemPanY,
+      s._settledScale
+    );
+  }
+}
+function dragPointerUp(){
+  isDragging = false;
+  document.body.classList.remove('dragging');
+  if(dragMoved){
+    // a real drag just ended — click handlers check this flag and bow out
+    // just once, rather than a global listener that could leak and end up
+    // silently blocking unrelated clicks if no click event happened to follow.
+    suppressNextClick = true;
+    setTimeout(()=>{ suppressNextClick = false; }, 50);
+  }
+}
+
+document.addEventListener('mousedown', (e)=>{ dragPointerDown(e.clientX, e.clientY, e.target); });
+document.addEventListener('mousemove', (e)=>{ dragPointerMove(e.clientX, e.clientY); });
+document.addEventListener('mouseup', dragPointerUp);
+
+document.addEventListener('touchstart', (e)=>{
+  if(e.touches.length !== 1) return;
+  dragPointerDown(e.touches[0].clientX, e.touches[0].clientY, e.target);
+}, { passive:true });
+document.addEventListener('touchmove', (e)=>{
+  if(!isDragging || e.touches.length !== 1) return;
+  dragPointerMove(e.touches[0].clientX, e.touches[0].clientY);
+}, { passive:true });
+document.addEventListener('touchend', dragPointerUp);
+</script>
+</body>
+</html>
